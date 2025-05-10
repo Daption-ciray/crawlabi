@@ -1,0 +1,45 @@
+{
+  "name": "playwright-rest-api",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/main.js",
+  "description": "A RESTful API for web scraping using Playwright",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "nodemon src/main.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "playwright install chromium",
+    "lint": "eslint .",
+    "prepare": "husky install"
+  },
+  "keywords": [
+    "playwright",
+    "web-scraping",
+    "api",
+    "rest"
+  ],
+  "author": "cıp,cıp",
+  "license": "MIT",
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^6.14.0",
+    "helmet": "^8.1.0",
+    "node-cache": "^5.1.2",
+    "playwright": "^1.51.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3",
+    "eslint": "^8.37.0",
+    "husky": "^8.0.0",
+    "lint-staged": "^13.2.0"
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix",
+      "git add"
+    ]
+  }
+}
