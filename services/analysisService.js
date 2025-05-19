@@ -37,8 +37,6 @@ async function imageToBase64(url) {
 // OpenAI ile karşılaştırmalı analiz
 async function analyzePairWithOpenAI(openai, damagedUrl, referenceUrl) {
   log('OpenAI karşılaştırmalı analiz başlatılıyor');
-  const damagedBase64 = await imageToBase64(damagedUrl);
-  const referenceBase64 = await imageToBase64(referenceUrl);
   const prompt = `You are an expert vehicle damage assessment assistant.\n\nYou will be given two image URLs:\n\n- Damaged vehicle image: [damaged]\n- Undamaged reference vehicle image: [reference]\n\nYour task is to:\n1. Compare the damaged vehicle to the undamaged reference.\n2. Identify only the parts that are visibly damaged and clearly need to be replaced or repaired.\n3. Include both external parts (e.g., bumper, fender, hood, doors, windshield, mirrors, lights, trunk, etc.) and interior parts (e.g., airbag, dashboard, steering wheel, seats, gear console, etc.) only if visible.\n4. Do not include undamaged, hidden, or unclear parts.\n5. Be precise and objective – avoid vague terms like "some damage" or "possible issues".\n6. For each part, provide a clear reason why it needs to be replaced or repaired (e.g., "cracked", "heavily dented", "torn off", "shattered").\n\nYour response must be in the following JSON format:\n{\n  "content": "Damaged / must-be-replaced parts:\\n\\n- [Part name] – [Reason]\\n- [Part name] – [Reason]",\n  "confidence": [a whole number between 0 and 100 indicating how confident you are in the damage list]\n}`;
 
   const response = await openai.chat.completions.create({
@@ -49,8 +47,8 @@ async function analyzePairWithOpenAI(openai, damagedUrl, referenceUrl) {
         role: "user",
         content: [
           { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${damagedBase64}` } },
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${referenceBase64}` } }
+          { type: "image_url", image_url: { url: damagedUrl } },
+          { type: "image_url", image_url: { url: referenceUrl } }
         ]
       }
     ],
@@ -70,7 +68,6 @@ async function analyzePairWithOpenAI(openai, damagedUrl, referenceUrl) {
 // OpenAI ile tekil hasarlı parça analizi
 async function analyzeSingleWithOpenAI(openai, damagedUrl) {
   log('OpenAI tekil parça analizi başlatılıyor');
-  const damagedBase64 = await imageToBase64(damagedUrl);
   const prompt = `You are a certified vehicle damage assessment expert.\n\nYou will receive a photo showing part(s) of a damaged vehicle. This could be a zoomed-in photo of a single part or a wide view (e.g., hood open) showing multiple parts.\n\nYour tasks:\n1. Identify all visible vehicle parts that appear damaged in the image.\n2. For each damaged part, provide:\n   - "part_name": The name of the damaged part (e.g., "Coolant reservoir", "Radiator support").\n   - "visible_damage": A short description of the damage (e.g., "Cracked and leaking").\n   - "recommendation": One of "Replace", "Repair", or "No damage".\n   - "confidence": A whole number between 0 and 100 representing how confident you are that this specific part is damaged as described.\n\nYour output must be a valid JSON object in the following format:\n{\n  "damage_summary": [\n    {\n      "part_name": "Coolant reservoir",\n      "visible_damage": "Cracked and leaking around the cap",\n      "recommendation": "Replace",\n      "confidence": 92\n    },\n    {\n      "part_name": "Radiator support bracket",\n      "visible_damage": "Bent mounting plate with rust",\n      "recommendation": "Repair",\n      "confidence": 85\n    }\n  ]\n}`;
 
   const response = await openai.chat.completions.create({
@@ -81,7 +78,7 @@ async function analyzeSingleWithOpenAI(openai, damagedUrl) {
         role: "user",
         content: [
           { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${damagedBase64}` } }
+          { type: "image_url", image_url: { url: damagedUrl } }
         ]
       }
     ],
