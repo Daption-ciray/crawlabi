@@ -10,6 +10,15 @@ const cache = new NodeCache({ stdTTL: 1800 });
 playwright.chromium.use(stealth());
 
 class ScraperService {
+    static BLOCKED_DOMAINS_KEYWORDS = [
+        'adservice', 'analytics', 'beacon', 'doubleclick', 'googletagmanager',
+        'google-analytics', 'facebook.com/tr/', 'pixel', 'track', 'scorecardresearch',
+        'adnxs', 'adform', 'adroll', 'adsystem', 'rubiconproject', 'openx', 'criteo',
+        // Common ad/tracker keywords - expand as needed
+        '.ads.', '/ads/', ' реклама ', // Cyrillic 'reklama' for ads
+        'googleadservices', 'appsflyer', 'criteo', 'outbrain', 'taboola', 'yieldify'
+    ];
+
     constructor() {
         this.browser = null;
         this.context = null;
@@ -20,6 +29,7 @@ class ScraperService {
 
     async initialize() {
         if (!this.browser) {
+            console.log('ScraperService: Initializing new browser instance...');
             this.browser = await playwright.chromium.launch({
                 headless: true,
                 args: [
@@ -36,6 +46,7 @@ class ScraperService {
         }
 
         if (!this.context) {
+            console.log('ScraperService: Initializing new browser context...');
             this.context = await this.browser.newContext({
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 viewport: { width: 1920, height: 1080 },
@@ -52,15 +63,65 @@ class ScraperService {
         }
     }
 
-    async retry(fn, retries = this.maxRetries) {
+    async retry(fn, operationName = 'operation', url = '', retries = this.maxRetries) {
         try {
             return await fn();
         } catch (error) {
             if (retries > 0) {
+                const attemptNumber = this.maxRetries - retries + 1;
+                console.warn(`ScraperService: ${operationName} for ${url} failed on attempt ${attemptNumber}/${this.maxRetries}. Retrying... Error: ${error.message.split('\n')[0]}`);
                 await new Promise(resolve => setTimeout(resolve, this.retryDelay));
-                return this.retry(fn, retries - 1);
+                return this.retry(fn, operationName, url, retries - 1);
             }
+            console.error(`ScraperService: ${operationName} for ${url} failed after ${this.maxRetries} attempts. Last error: ${error.message.split('\n')[0]}`);
             throw error;
+        }
+    }
+
+    async _setupResourceBlocking(page, options) {
+        const { blockAds = true, blockTrackers = true, blockMedia = false } = options;
+        if (!blockAds && !blockTrackers && !blockMedia) {
+            return;
+        }
+
+        await page.route('**/*', route => {
+            const request = route.request();
+            const reqUrl = request.url().toLowerCase();
+            const resourceType = request.resourceType();
+
+            if (blockAds || blockTrackers) {
+                if (ScraperService.BLOCKED_DOMAINS_KEYWORDS.some(keyword => reqUrl.includes(keyword))) {
+                    // console.log(`ScraperService: Blocking ad/tracker: ${reqUrl}`);
+                    return route.abort('aborted');
+                }
+            }
+
+            if (blockMedia && ['image', 'media', 'font'].includes(resourceType)) {
+                // console.log(`ScraperService: Blocking media: ${reqUrl} (type: ${resourceType})`);
+                return route.abort('aborted');
+            }
+
+            return route.continue();
+        });
+    }
+
+    async _extractDataFromElement(element, type, attributeName) {
+        if (!element) return null;
+        try {
+            switch (type) {
+                case 'text':
+                    return (await element.textContent())?.trim() || null;
+                case 'html':
+                    return await element.innerHTML();
+                case 'attribute':
+                    return attributeName ? await element.getAttribute(attributeName) : null;
+                default:
+                    console.warn(`ScraperService: Unknown selector type for data extraction: ${type}`);
+                    return null;
+            }
+        } catch (ex) {
+            console.warn(`ScraperService: Error extracting data type '${type}' from element: ${ex.message.split('\n')[0]}`);
+            return null;
         }
     }
 
@@ -78,41 +139,17 @@ class ScraperService {
         
         if (useCache) {
             const cachedResult = cache.get(cacheKey);
-            if (cachedResult) return cachedResult;
+            if (cachedResult) {
+                console.log(`ScraperService: Cache hit for ${url}`);
+                return cachedResult;
+            }
         }
 
         return this.retry(async () => {
             await this.initialize();
             const page = await this.context.newPage();
-
-            // Resource blocking
-            if (blockAds || blockTrackers || blockMedia) {
-                await page.route('**/*', route => {
-                    const request = route.request();
-                    const url = request.url();
-                    const resourceType = request.resourceType();
-
-                    // Block ads and trackers
-                    if (blockAds || blockTrackers) {
-                        const blockedDomains = [
-                            'ads', 'analytics', 'tracking', 'doubleclick',
-                            'google-analytics', 'facebook.com', 'googletagmanager',
-                            'adnxs', 'adform', 'adroll', 'adsystem'
-                        ];
-                        
-                        if (blockedDomains.some(domain => url.includes(domain))) {
-                            return route.abort();
-                        }
-                    }
-
-                    // Block media
-                    if (blockMedia && ['image', 'media', 'font'].includes(resourceType)) {
-                        return route.abort();
-                    }
-
-                    return route.continue();
-                });
-            }
+            
+            await this._setupResourceBlocking(page, { blockAds, blockTrackers, blockMedia });
 
             try {
                 // Navigate with optimized settings
@@ -128,59 +165,33 @@ class ScraperService {
                 const results = {};
                 
                 for (const selector of selectors) {
+                    if (!selector || !selector.query || !selector.name || !selector.type) {
+                        console.warn(`ScraperService: Invalid selector object for URL ${url}:`, selector);
+                        results[selector.name || `invalid_selector_${Date.now()}`] = null;
+                        continue;
+                    }
                     try {
                         const elements = await page.$$(selector.query);
                         
-                        if (selector.multiple) {
-                            results[selector.name] = await Promise.all(
-                                elements.map(async (el) => {
-                                    try {
-                                        switch (selector.type) {
-                                            case 'text':
-                                                return (await el.textContent())?.trim() || null;
-                                            case 'html':
-                                                return await el.innerHTML();
-                                            case 'attribute':
-                                                return await el.getAttribute(selector.attribute);
-                                            case 'count':
-                                                return elements.length;
-                                            case 'exists':
-                                                return true;
-                                            default:
-                                                return null;
-                                        }
-                                    } catch {
-                                        return null;
-                                    }
-                                })
-                            );
-                        } else {
-                            const element = elements[0];
-                            if (element) {
-                                switch (selector.type) {
-                                    case 'text':
-                                        results[selector.name] = (await element.textContent())?.trim() || null;
-                                        break;
-                                    case 'html':
-                                        results[selector.name] = await element.innerHTML();
-                                        break;
-                                    case 'attribute':
-                                        results[selector.name] = await element.getAttribute(selector.attribute);
-                                        break;
-                                    case 'count':
-                                        results[selector.name] = elements.length;
-                                        break;
-                                    case 'exists':
-                                        results[selector.name] = true;
-                                        break;
-                                    default:
-                                        results[selector.name] = null;
-                                }
+                        if (selector.type === 'exists') {
+                            results[selector.name] = elements.length > 0;
+                        } else if (selector.type === 'count') {
+                            results[selector.name] = elements.length;
+                        } else if (selector.multiple) {
+                            if (elements.length > 0) {
+                                results[selector.name] = await Promise.all(
+                                    elements.map(el => this._extractDataFromElement(el, selector.type, selector.attribute))
+                                );
                             } else {
-                                results[selector.name] = selector.type === 'exists' ? false : null;
+                                results[selector.name] = []; // Return empty array if no elements found for multiple
                             }
+                        } else { // Single element
+                            results[selector.name] = elements[0]
+                                ? await this._extractDataFromElement(elements[0], selector.type, selector.attribute)
+                                : null;
                         }
-                    } catch {
+                    } catch (error) {
+                        console.error(`ScraperService: Error processing selector "${selector.name}" (${selector.query}) on ${url}: ${error.message.split('\n')[0]}`);
                         results[selector.name] = null;
                     }
                 }
@@ -197,7 +208,7 @@ class ScraperService {
                 await page.close();
                 throw error;
             }
-        });
+        }, 'scrape', url);
     }
 
     async clearCache(url = null) {
@@ -210,14 +221,24 @@ class ScraperService {
     }
 
     async close() {
+        console.log('ScraperService: Closing browser context and browser...');
         if (this.context) {
-            await this.context.close();
+            try {
+                await this.context.close();
+            } catch (e) {
+                console.error('ScraperService: Error closing context:', e.message);
+            }
             this.context = null;
         }
         if (this.browser) {
-            await this.browser.close();
+            try {
+                await this.browser.close();
+            } catch (e) {
+                console.error('ScraperService: Error closing browser:', e.message);
+            }
             this.browser = null;
         }
+        console.log('ScraperService: Browser and context closed.');
     }
 }
 

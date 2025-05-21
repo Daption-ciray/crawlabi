@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import axios from 'axios';
 import config from '../config.js';
-import pLimit from 'p-limit';
 
 // Constants
 const VALID_ANGLES = [
@@ -32,9 +31,6 @@ setInterval(() => { sentThisMinute = 0; }, 60000);
 const openai = new OpenAI({
     apiKey: config.openai.apiKey
 });
-
-// Initialize rate limiter
-const limit = pLimit(CONCURRENT_LIMIT);
 
 // Utility functions
 async function validateImageUrl(imageUrl) {
@@ -71,12 +67,19 @@ function validateAnalysis(analysis, requireSeverity = false) {
     }
 
     if (!VALID_ANGLES.includes(analysis.angle)) {
+        console.warn(`Invalid angle "${analysis.angle}" received, defaulting to "Unclear / Undefined".`);
         analysis.angle = 'Unclear / Undefined';
         analysis.confidence = Math.min(analysis.confidence, 50);
     }
 
-    if (requireSeverity && !VALID_SEVERITY.includes(analysis.damage_severity)) {
-        analysis.damage_severity = 'Unclear';
+    if (requireSeverity) {
+        if (!analysis.damage_severity) {
+            console.warn('Damage severity missing when required, defaulting to "Unclear".');
+            analysis.damage_severity = 'Unclear';
+        } else if (!VALID_SEVERITY.includes(analysis.damage_severity)) {
+            console.warn(`Invalid damage severity "${analysis.damage_severity}" received, defaulting to "Unclear".`);
+            analysis.damage_severity = 'Unclear';
+        }
     }
 
     analysis.confidence = Math.min(100, Math.max(0, analysis.confidence));
@@ -87,19 +90,25 @@ function parseApiResponse(content, requireSeverity = false) {
     try {
         const analysis = JSON.parse(content);
         return validateAnalysis(analysis, requireSeverity);
-    } catch (error) {
-        console.error('Failed to parse API response as JSON:', error);
-        const angleMatch = content.match(/angle["\s:]+([^"}\n]+)/i);
-        const descMatch = content.match(/description["\s:]+([^"}\n]+)/i);
-        const severityMatch = content.match(/damage_severity["\s:]+([^"}\n]+)/i);
-        const confMatch = content.match(/confidence["\s:]+(\d+)/i);
+    } catch (jsonParseError) {
+        console.warn('Failed to parse API response as JSON, attempting regex extraction:', jsonParseError.message);
+        const angleMatch = content.match(/"angle"\s*:\s*"([^"]+)"/i);
+        const descMatch = content.match(/"description"\s*:\s*"([^"]+)"/i);
+        const severityMatch = content.match(/"damage_severity"\s*:\s*"([^"]+)"/i);
+        const confMatch = content.match(/"confidence"\s*:\s*(\d+)/i);
 
-        return validateAnalysis({
+        const extractedAnalysis = {
             angle: angleMatch ? angleMatch[1].trim() : 'Unclear / Undefined',
-            description: descMatch ? descMatch[1].trim() : 'No analysis available',
-            damage_severity: severityMatch ? severityMatch[1].trim() : 'Unclear',
-            confidence: confMatch ? parseInt(confMatch[1]) : 0
-        }, requireSeverity);
+            description: descMatch ? descMatch[1].trim() : 'No analysis available from regex',
+            confidence: confMatch ? parseInt(confMatch[1], 10) : 0
+        };
+
+        if (requireSeverity) {
+            extractedAnalysis.damage_severity = severityMatch ? severityMatch[1].trim() : 'Unclear';
+        }
+        
+        console.log("Regex extracted analysis:", extractedAnalysis);
+        return validateAnalysis(extractedAnalysis, requireSeverity);
     }
 }
 
@@ -146,21 +155,75 @@ async function callOpenAI(prompt, imageUrl, retryCount = 0) {
     }
 }
 
-async function safeAnalyzeImage(url, fn) {
-    while (sentThisMinute >= MAX_PER_MINUTE) {
-        console.log('TPM limitine yaklaşıldı, 1 sn bekleniyor...');
-        await sleep(1000);
+async function performImageAnalysis(imageUrl, prompt, requireSeverity = false) {
+    try {
+        console.log(`Starting analysis for: ${imageUrl}, Severity required: ${requireSeverity}`);
+        await validateImageUrl(imageUrl);
+
+        const content = await callOpenAI(prompt, imageUrl);
+        const analysis = parseApiResponse(content, requireSeverity);
+
+        console.log('Successfully analyzed:', {
+            url: imageUrl,
+            ...analysis
+        });
+        return analysis;
+
+    } catch (error) {
+        console.error(`Error in performImageAnalysis for ${imageUrl}:`, error.message);
+        return { 
+            error: `Analysis failed: ${error.message}`, 
+            angle: 'Unclear / Undefined', 
+            description: 'Analysis failed', 
+            confidence: 0,
+            ...(requireSeverity && { damage_severity: 'Unclear' })
+        };
     }
-    sentThisMinute++;
-    return fn(url);
+}
+
+async function processBatchAnalysis(imageUrls, analysisFn) {
+    if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
+        throw new Error('Invalid image URLs array provided');
+    }
+    console.log(`Starting batch analysis for ${imageUrls.length} images.`);
+    
+    const results = [];
+    const errors = [];
+
+    for (const url of imageUrls) {
+        while (sentThisMinute >= MAX_PER_MINUTE) {
+            console.log(`TPM limit (${MAX_PER_MINUTE}/min) reached, waiting 1 second...`);
+            await sleep(1000);
+        }
+        sentThisMinute++;
+        
+        try {
+            const result = await analysisFn(url);
+            if (result.error) {
+                 errors.push({ url, error: result.error, details: result });
+            } else {
+                results.push({ url, ...result });
+            }
+        } catch (error) {
+            console.error(`Unhandled error during batch processing for ${url}:`, error.message);
+            errors.push({ url, error: error.message });
+        }
+    }
+
+    const summary = {
+        total: imageUrls.length,
+        successful: results.length,
+        failed: errors.length
+    };
+    console.log('Batch analysis completed:', summary);
+    if (errors.length > 0) {
+        console.warn('Errors during batch processing:', errors);
+    }
+    return { results, errors, summary };
 }
 
 async function analyzeImage(imageUrl) {
-    try {
-        console.log('Starting image analysis for:', imageUrl);
-        await validateImageUrl(imageUrl);
-
-        const prompt = `Analyze this vehicle image and respond in JSON format with the following fields:
+    const prompt = `Analyze this vehicle image and respond in JSON format with the following fields:
 {
     "angle": "[Front|Rear|Left|Right|Interior|Hood Open|Trunk Open|Car Part|Unclear / Undefined]",
     "description": "detailed description of the vehicle and its condition",
@@ -168,61 +231,15 @@ async function analyzeImage(imageUrl) {
 }
 
 For the angle, strictly use one of the provided options. For the description, include the vehicle's color, visible parts, condition, and any notable features. Be concise yet comprehensive.`;
-
-        const content = await callOpenAI(prompt, imageUrl);
-        const analysis = parseApiResponse(content);
-
-        console.log('Successfully analyzed image:', {
-            url: imageUrl,
-            angle: analysis.angle,
-            confidence: analysis.confidence
-        });
-
-        return {
-            angle: analysis.angle,
-            description: analysis.description,
-            confidence: analysis.confidence
-        };
-
-    } catch (error) {
-        console.error('Error in analyzeImage:', {
-            error: error.message,
-            imageUrl: imageUrl
-        });
-        throw new Error(`Image analysis failed: ${error.message}`);
-    }
+    return performImageAnalysis(imageUrl, prompt, false);
 }
 
 async function analyzeImages(imageUrls) {
-    if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
-        throw new Error('Invalid image URLs array provided');
-    }
-    console.log('Starting batch image analysis for', imageUrls.length, 'images');
-    const results = [];
-    const errors = [];
-    for (const url of imageUrls) {
-        try {
-            const result = await safeAnalyzeImage(url, analyzeImage);
-            results.push({ url, ...result });
-        } catch (error) {
-            errors.push({ url, error: error.message });
-        }
-    }
-    const summary = {
-        total: imageUrls.length,
-        successful: results.length,
-        failed: errors.length
-    };
-    console.log('Batch analysis completed:', summary);
-    return { results, errors, summary };
+    return processBatchAnalysis(imageUrls, analyzeImage);
 }
 
 async function analyzeDamage(imageUrl) {
-    try {
-        console.log('Starting damage analysis for:', imageUrl);
-        await validateImageUrl(imageUrl);
-
-        const prompt = `Analyze this vehicle image for damage and respond in JSON format with the following fields:
+    const prompt = `Analyze this vehicle image for damage and respond in JSON format with the following fields:
 {
     "angle": "[Front|Rear|Left|Right|Interior|Hood Open|Trunk Open|Car Part|Unclear / Undefined]",
     "description": "brief damage description focusing only on key damage points",
@@ -231,55 +248,11 @@ async function analyzeDamage(imageUrl) {
 }
 
 Strictly use one of the provided options for the angle and damage_severity. The description should be concise and focus only on damage details - location, type, and extent.`;
-
-        const content = await callOpenAI(prompt, imageUrl);
-        const analysis = parseApiResponse(content, true);
-
-        console.log('Successfully analyzed damage:', {
-            url: imageUrl,
-            angle: analysis.angle,
-            severity: analysis.damage_severity,
-            confidence: analysis.confidence
-        });
-
-        return {
-            angle: analysis.angle,
-            description: analysis.description,
-            damage_severity: analysis.damage_severity,
-            confidence: analysis.confidence
-        };
-
-    } catch (error) {
-        console.error('Error in analyzeDamage:', {
-            error: error.message,
-            imageUrl: imageUrl
-        });
-        throw new Error(`Damage analysis failed: ${error.message}`);
-    }
+    return performImageAnalysis(imageUrl, prompt, true);
 }
 
 async function analyzeDamages(imageUrls) {
-    if (!Array.isArray(imageUrls) || imageUrls.length === 0) {
-        throw new Error('Invalid image URLs array provided');
-    }
-    console.log('Starting batch damage analysis for', imageUrls.length, 'images');
-    const results = [];
-    const errors = [];
-    for (const url of imageUrls) {
-        try {
-            const result = await safeAnalyzeImage(url, analyzeDamage);
-            results.push({ url, ...result });
-        } catch (error) {
-            errors.push({ url, error: error.message });
-        }
-    }
-    const summary = {
-        total: imageUrls.length,
-        successful: results.length,
-        failed: errors.length
-    };
-    console.log('Batch damage analysis completed:', summary);
-    return { results, errors, summary };
+    return processBatchAnalysis(imageUrls, analyzeDamage);
 }
 
 export {
