@@ -1,18 +1,12 @@
 import express from 'express';
 import { analyzeImages, analyzeDamages } from '../services/imageAnalyzer.js';
+import { validateUrls } from '../middleware/validator.js';
 
 const router = express.Router();
 
-router.post('/analyze', async (req, res) => {
+router.post('/analyze', validateUrls, async (req, res) => {
     try {
         const { urls } = req.body;
-
-        if (!urls || !Array.isArray(urls) || urls.length === 0) {
-            return res.status(400).json({
-                error: 'Invalid request',
-                message: 'Please provide an array of image URLs'
-            });
-        }
 
         console.log('Received request to analyze images:', {
             count: urls.length,
@@ -49,16 +43,9 @@ router.post('/analyze', async (req, res) => {
     }
 });
 
-router.post('/damage-analyze', async (req, res) => {
+router.post('/damage-analyze', validateUrls, async (req, res) => {
     try {
         const { urls } = req.body;
-
-        if (!urls || !Array.isArray(urls) || urls.length === 0) {
-            return res.status(400).json({
-                error: 'Invalid request',
-                message: 'Please provide an array of image URLs'
-            });
-        }
 
         console.log('Received request to analyze damage:', {
             count: urls.length,

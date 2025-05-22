@@ -36,10 +36,19 @@ npm install
 npx playwright install chromium
 ```
 
-4. `.env` dosyasını oluşturun:
+4. `.env` dosyasını oluşturun ve aşağıdaki değişkenleri ayarlayın:
 ```env
 PORT=3000
 OPENAI_API_KEY=your_openai_api_key
+
+# Opsiyonel - OpenAI ayarları (varsayılan değerler kullanılır)
+# OPENAI_API_MODEL=gpt-4.1
+# OPENAI_MAX_TOKENS=2048
+# OPENAI_API_URL=https://api.openai.com/v1/chat/completions
+
+# Opsiyonel - CORS ayarları (production için)
+# NODE_ENV=production
+# ALLOWED_ORIGINS=https://your-frontend-domain.com,https://another-domain.com
 ```
 
 5. Uygulamayı başlatın:
@@ -118,37 +127,40 @@ DELETE /api/scraper/cache
 GET /api/scraper/status
 ```
 
-## Seçici Tipleri
+### Araç Görüntü Kırpma ve Analiz (Cropper)
 
-- `text`: Metin içeriği çıkarma
-- `innerText`: İç metin çıkarma
-- `html`: HTML içeriği çıkarma
-- `attribute`: Belirli bir öznitelik çıkarma (attribute alanı gerekli)
-- `count`: Eşleşen öğeleri sayma
-- `exists`: Öğenin varlığını kontrol etme
+Bu endpoint, yüklenen bir görüntünün belirli alanlarını kırpar ve her bir kırpılmış alanı OpenAI Vision API kullanarak analiz eder.
 
-## Önbellek Sistemi
+#### Görüntü Kırpma ve Analiz
+```http
+POST /api/cropper/crop-analyze
+Content-Type: multipart/form-data
 
-Sonuçlar varsayılan olarak 30 dakika süreyle önbelleğe alınır. Bu süre, performansı artırmak ve hedef web sitelerindeki yükü azaltmak için kullanılır. Önbellek anahtarları URL ve kullanılan seçicilere göre oluşturulur.
-
-## Hata Yönetimi
-
-API, detaylı hata mesajları sağlar ve çeşitli hata senaryolarını zarif bir şekilde yönetir.
-
-## Geliştirme
-
-```bash
-# Geliştirme modunda çalıştırma (otomatik yeniden başlatma)
-npm run dev
-
-# Scraping testi
-npm run scrape
+Form Alanları:
+- image: (dosya) Yüklenecek görüntü dosyası (JPEG veya PNG, maks 5MB).
 ```
 
-## Lisans
+**Yanıt Örneği:**
+```json
+{
+    "message": "Analiz tamamlandı",
+    "detectedAreas": [
+        {
+            "label": "sürücü görüşleri",
+            "box": { "x": 50, "y": 1150, "width": 10000, "height": 2500 },
+            "cropFile": "1678886400000_0_sürücü_görüşleri.jpg",
+            "detail": { /* OpenAI analiz sonucu veya hata */ }
+        },
+        {
+            "label": "çarpışma yerinin ve anının taslağını çiziniz",
+            "box": { "x": 29, "y": 1000, "width": 900, "height": 190 },
+            "cropFile": "1678886400001_1_çarpışma_yerinin_ve_anının_taslağını_çiziniz.jpg",
+            "detail": { /* OpenAI analiz sonucu veya hata */ }
+        }
+    ]
+}
+```
 
-MIT
+## Seçici Tipleri
 
-## İletişim
-
-[İletişim bilgileriniz] 
+- `
