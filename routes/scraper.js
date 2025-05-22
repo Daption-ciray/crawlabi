@@ -11,7 +11,7 @@ router.get('/test', (req, res) => {
 
 // Scrape data from URL
 router.post('/scrape', async (req, res) => {
-    console.log('Scrape endpoint hit with body:', req.body);
+    // console.log('Scrape endpoint hit with body:', req.body); // Removed as consoleLogger already logs body
     
     try {
         const { url, selectors, options } = req.body;
@@ -34,15 +34,17 @@ router.post('/scrape', async (req, res) => {
         res.json(results);
 
     } catch (error) {
-        console.error('Scraping route error:', {
-            error: error.message,
-            stack: error.stack,
-            body: req.body
+        console.error('Scraping route error:', { // Log contextual details
+            message: error.message,
+            stack: error.stack, // Keep stack for server-side logging
+            url: req.body.url, // Log relevant request parameters
+            options: req.body.options
         });
-        res.status(500).json({
-            error: error.message || 'Internal server error',
-            details: error.stack
-        });
+        // Add statusCode if not present, or for specific error types
+        if (!error.statusCode) {
+            error.statusCode = 500;
+        }
+        next(error); // Pass to global error handler
     }
 });
 
@@ -56,9 +58,11 @@ router.delete('/cache', async (req, res) => {
         res.json({ message: 'Cache cleared successfully' });
     } catch (error) {
         console.error('Cache clear error:', error);
-        res.status(500).json({
-            error: error.message || 'Failed to clear cache'
-        });
+         // Add statusCode if not present, or for specific error types
+        if (!error.statusCode) {
+            error.statusCode = 500;
+        }
+        next(error); // Pass to global error handler
     }
 });
 

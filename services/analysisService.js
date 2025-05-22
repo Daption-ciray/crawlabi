@@ -1,110 +1,159 @@
 import Airtable from 'airtable';
-import { OpenAI } from 'openai';
+import { OpenAI } from 'openai'; // OpenAI client is initialized per call or as needed now
+import config from '../config.js';
+// Import callOpenAI from imageAnalyzerService to centralize OpenAI API calls - Removed as it's not used
+// import { callOpenAI as callOpenAIGeneric } from './imageAnalyzer.js'; 
 
-// Config
-const AIRTABLE_DAMAGED_TABLE = "Hasarlı";
-const AIRTABLE_REFERENCE_TABLE = "Hasarsız";
-const AIRTABLE_ACCIDENT_ANALYSIS_TABLE = "Kaza Analiz Tablosu";
-const AIRTABLE_PART_ANALYSIS_TABLE = "parca analiz";
+// Configuration constants from config.js
+const {
+    damagedTable: AIRTABLE_DAMAGED_TABLE,
+    referenceTable: AIRTABLE_REFERENCE_TABLE,
+    accidentAnalysisTable: AIRTABLE_ACCIDENT_ANALYSIS_TABLE,
+    partAnalysisTable: AIRTABLE_PART_ANALYSIS_TABLE
+} = config.airtable;
 
-// Basitleştirilmiş log fonksiyonları
-const log = (...args) => console.log('[LOG]', ...args.map(arg => 
-  typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-));
+const {
+    visionModel,
+    imageDetail,
+    maxTokens
+} = config.openai;
 
-const logError = (...args) => console.error('[ERROR]', ...args.map(arg => 
-  typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-));
+const {
+    damageAssessment: damageAssessmentPrompt,
+    singlePartAssessment: singlePartAssessmentPrompt
+} = config.airtable.prompts;
 
-// Airtable'dan tablo verilerini çek (dinamik base ile)
+
+/**
+ * Fetches all records from a specified Airtable table.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {string} tableName - The name of the table to fetch records from.
+ * @returns {Promise<Airtable.Record[]>} A promise that resolves to an array of records.
+ */
 async function fetchAirtableRecordsWithBase(base, tableName) {
   const records = [];
   await base(tableName).select().eachPage((pageRecords, fetchNextPage) => {
     records.push(...pageRecords);
     fetchNextPage();
   });
-  log(`Fetched ${records.length} records from ${tableName}`);
+  console.log(`[INFO] Fetched ${records.length} records from ${tableName}`);
   return records;
 }
 
-// OpenAI ile karşılaştırmalı analiz
-async function analyzePairWithOpenAI(openai, damagedUrl, referenceUrl) {
-  log('OpenAI karşılaştırmalı analiz başlatılıyor', { damagedUrl, referenceUrl });
-  const prompt = `You are an expert vehicle damage assessment assistant.\n\nYou will be given two image URLs:\n\n- Damaged vehicle image: [damaged]\n- Undamaged reference vehicle image: [reference]\n\nYour task is to:\n1. Compare the damaged vehicle to the undamaged reference.\n2. Identify only the parts that are visibly damaged and clearly need to be replaced or repaired.\n3. Include both external parts (e.g., bumper, fender, hood, doors, windshield, mirrors, lights, trunk, etc.) and interior parts (e.g., airbag, dashboard, steering wheel, seats, gear console, etc.) only if visible.\n4. Do not include undamaged, hidden, or unclear parts.\n5. Be precise and objective – avoid vague terms like "some damage" or "possible issues".\n6. For each part, provide a clear reason why it needs to be replaced or repaired (e.g., "cracked", "heavily dented", "torn off", "shattered").\n\nYour response must be in the following JSON format:\n{\n  "content": "Damaged / must-be-replaced parts:\\n\\n- [Part name] – [Reason]\\n- [Part name] – [Reason]",\n  "confidence": [a whole number between 0 and 100 indicating how confident you are in the damage list]\n}`;
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      { role: "system", content: "You are an expert vehicle damage assessment assistant." },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: damagedUrl } },
-          { type: "image_url", image_url: { url: referenceUrl } }
-        ]
-      }
-    ],
-    max_tokens: 800
-  });
+/**
+ * Performs comparative analysis of a damaged and a reference image using OpenAI.
+ * Uses the generic callOpenAIGeneric function from imageAnalyzer.js for the API call.
+ * @param {string} damagedUrl - URL of the damaged image.
+ * @param {string} referenceUrl - URL of the reference (undamaged) image.
+ * @returns {Promise<object>} A promise that resolves to the parsed JSON response from OpenAI.
+ */
+async function analyzePairWithOpenAI(damagedUrl, referenceUrl) {
+  console.log('[INFO] OpenAI comparative analysis starting:', { damagedUrl, referenceUrl });
   
-  const text = response.choices[0].message.content;
+  // Construct the messages array for the OpenAI API call
+  const messages = [
+    { role: "system", content: "You are an expert vehicle damage assessment assistant." },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: damageAssessmentPrompt },
+        { type: "image_url", image_url: { url: damagedUrl, detail: imageDetail } },
+        { type: "image_url", image_url: { url: referenceUrl, detail: imageDetail } }
+      ]
+    }
+  ];
+
   try {
+    // Direct OpenAI client usage for multi-image prompts or specific payload structures.
+    const openai = new OpenAI({ apiKey: config.openai.apiKey });
+    const response = await openai.chat.completions.create({
+        model: visionModel,
+        messages: messages,
+        max_tokens: maxTokens,
+        // response_format: { type: "json_object" }, // Ensure this is supported or handled if not.
+        // temperature: config.openai.temperature, // Add if needed for this specific call
+    });
+
+    const text = response.choices[0].message.content;
     return JSON.parse(text);
   } catch (parseError) {
-    logError("analyzePairWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text:", text);
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match && match[0]) {
-      try {
-        return JSON.parse(match[0]);
-      } catch (regexParseError) {
-        logError("analyzePairWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
-        return { error: "OpenAI response not in JSON format after regex", raw: text, matched: match[0] };
-      }
+    // Error handling for JSON parsing, similar to original
+    console.error("[ERROR] analyzePairWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text before parse attempt:", response?.choices?.[0]?.message?.content);
+    const rawText = response?.choices?.[0]?.message?.content;
+    if (rawText) {
+        const match = rawText.match(/\{[\s\S]*\}/);
+        if (match && match[0]) {
+            try {
+                return JSON.parse(match[0]);
+            } catch (regexParseError) {
+                console.error("[ERROR] analyzePairWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
+                return { error: "OpenAI response not in JSON format after regex", raw: rawText, matched: match[0] };
+            }
+        }
     }
-    return { error: "OpenAI response not in JSON format", raw: text };
+    return { error: "OpenAI response not in JSON format or missing content", raw: rawText };
   }
 }
 
-// OpenAI ile tekil hasarlı parça analizi
-async function analyzeSingleWithOpenAI(openai, damagedUrl) {
-  log('OpenAI tekil parça analizi başlatılıyor', { damagedUrl });
-  const prompt = `You are a certified vehicle damage assessment expert.\n\nYou will receive a photo showing part(s) of a damaged vehicle. This could be a zoomed-in photo of a single part or a wide view (e.g., hood open) showing multiple parts.\n\nYour tasks:\n1. Identify all visible vehicle parts that appear damaged in the image.\n2. For each damaged part, provide:\n   - "part_name": The name of the damaged part (e.g., "Coolant reservoir", "Radiator support").\n   - "visible_damage": A short description of the damage (e.g., "Cracked and leaking").\n   - "recommendation": One of "Replace", "Repair", or "No damage".\n   - "confidence": A whole number between 0 and 100 representing how confident you are that this specific part is damaged as described.\n\nYour output must be a valid JSON object in the following format:\n{\n  "damage_summary": [\n    {\n      "part_name": "Coolant reservoir",\n      "visible_damage": "Cracked and leaking around the cap",\n      "recommendation": "Replace",\n      "confidence": 92\n    },\n    {\n      "part_name": "Radiator support bracket",\n      "visible_damage": "Bent mounting plate with rust",\n      "recommendation": "Repair",\n      "confidence": 85\n    }\n  ]\n}`;
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
+/**
+ * Performs analysis of a single image, typically a 'car part', using OpenAI.
+ * Uses the generic callOpenAIGeneric function from imageAnalyzer.js for the API call.
+ * @param {string} damagedUrl - URL of the damaged image.
+ * @returns {Promise<object>} A promise that resolves to the parsed JSON response from OpenAI.
+ */
+async function analyzeCarPartWithOpenAI(damagedUrl) {
+  console.log('[INFO] OpenAI single car part analysis starting:', { damagedUrl });
+  
+  // Direct OpenAI client usage for specific payload structures.
+  const openai = new OpenAI({ apiKey: config.openai.apiKey });
+   const messages = [
       { role: "system", content: "You are a certified vehicle damage assessment expert." },
       {
         role: "user",
         content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: damagedUrl } }
+          { type: "text", text: singlePartAssessmentPrompt },
+          { type: "image_url", image_url: { url: damagedUrl, detail: imageDetail } }
         ]
       }
-    ],
-    max_tokens: 800
-  });
-  
-  const text = response.choices[0].message.content;
+    ];
+
   try {
+    const response = await openai.chat.completions.create({
+        model: visionModel,
+        messages: messages,
+        max_tokens: maxTokens,
+        // response_format: { type: "json_object" }, // Ensure this is supported
+        // temperature: config.openai.temperature,
+    });
+    const text = response.choices[0].message.content;
     return JSON.parse(text);
   } catch (parseError) {
-    logError("analyzeSingleWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text:", text);
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match && match[0]) {
-      try {
-        return JSON.parse(match[0]);
-      } catch (regexParseError) {
-        logError("analyzeSingleWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
-        return { error: "OpenAI single response not in JSON format after regex", raw: text, matched: match[0] };
-      }
+    console.error("[ERROR] analyzeCarPartWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text before parse attempt:", response?.choices?.[0]?.message?.content);
+    const rawText = response?.choices?.[0]?.message?.content;
+     if (rawText) {
+        const match = rawText.match(/\{[\s\S]*\}/);
+        if (match && match[0]) {
+            try {
+                return JSON.parse(match[0]);
+            } catch (regexParseError) {
+                console.error("[ERROR] analyzeCarPartWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
+                return { error: "OpenAI response not in JSON format after regex", raw: rawText, matched: match[0] };
+            }
+        }
     }
-    return { error: "OpenAI single response not in JSON format", raw: text };
+    return { error: "OpenAI response not in JSON format or missing content", raw: rawText };
   }
 }
 
-// Airtable'da mevcut en yüksek id'yi bul
+
+/**
+ * Gets the next available ID for a record in an Airtable table.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {string} tableName - The name of the table.
+ * @param {string} idField - The name of the ID field.
+ * @param {string} prefix - The prefix for the ID.
+ * @returns {Promise<string>} The next ID string.
+ */
 async function getNextId(base, tableName, idField, prefix) {
   const records = await base(tableName).select({ fields: [idField] }).all();
   let max = 0;
@@ -120,27 +169,39 @@ async function getNextId(base, tableName, idField, prefix) {
   return `${prefix}${max + 1}`;
 }
 
-// Airtable'da id ile kayıt var mı kontrol et, varsa güncelle yoksa ekle
+/**
+ * Upserts a record in Airtable based on a specific ID field.
+ * If a record with the ID value exists, it's updated; otherwise, a new record is created.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {string} tableName - The name of the table.
+ * @param {string} idField - The name of the ID field to check for existing records.
+ * @param {string} idValue - The value of the ID to search for.
+ * @param {object} fields - The fields to create or update.
+ */
 async function upsertAirtableWithId(base, tableName, idField, idValue, fields) {
   try {
     const records = await base(tableName).select({ filterByFormula: `{${idField}} = '${idValue}'` }).all();
     if (records.length > 0) {
       await base(tableName).update(records[0].id, fields);
-      log(`Airtable'da güncellendi: [${tableName}] id=${idValue}`);
+      console.log(`[INFO] Airtable record updated in [${tableName}]: id=${idValue}`);
     } else {
       await base(tableName).create([{ fields: { ...fields, [idField]: idValue } }]);
-      log(`Airtable'a eklendi: [${tableName}] id=${idValue}`);
+      console.log(`[INFO] Airtable record created in [${tableName}]: id=${idValue}`);
     }
   } catch (error) {
-    logError("upsertAirtableWithId hata:", `tableName=${tableName}, idField=${idField}, idValue=${idValue}`, error.message);
+    console.error(`[ERROR] upsertAirtableWithId failed for table ${tableName}, id ${idValue}:`, error.message);
     throw error;
   }
 }
 
-// Parça analizi kaydı (tekil analiz)
+/**
+ * Saves part analysis data to Airtable.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {Array<object>} damage_summary - An array of damage summary objects.
+ */
 async function savePartAnalysis(base, damage_summary) {
   if (!Array.isArray(damage_summary) || damage_summary.length === 0) {
-    log("savePartAnalysis: Boş veya geçersiz damage_summary, kayıt atlanıyor.");
+    console.log("[INFO] savePartAnalysis: Empty or invalid damage_summary, skipping save.");
     return;
   }
   
@@ -149,17 +210,17 @@ async function savePartAnalysis(base, damage_summary) {
     const nextIdStr = await getNextId(base, AIRTABLE_PART_ANALYSIS_TABLE, 'parca_analiz_id', 'parca_analiz_');
     nextIdNum = parseInt(nextIdStr.replace('parca_analiz_', ''), 10);
     if (isNaN(nextIdNum)) {
-        logError("savePartAnalysis: getNextId'den geçersiz numara alındı:", nextIdStr, "Varsayılan 1 kullanılacak.");
+        console.error("[ERROR] savePartAnalysis: Invalid number from getNextId:", nextIdStr, "Defaulting to 1.");
         nextIdNum = 1; 
     }
   } catch (error) {
-      logError("savePartAnalysis: getNextId hatası:", error.message, "Varsayılan 1 kullanılacak.");
+      console.error("[ERROR] savePartAnalysis: Error in getNextId:", error.message, "Defaulting to 1.");
       nextIdNum = 1; 
   }
 
   for (const part of damage_summary) {
     if (!part || typeof part !== 'object' || !part.part_name) {
-        logError("savePartAnalysis: Geçersiz part objesi veya eksik part_name:", part, "Kayıt atlanıyor.");
+        console.error("[ERROR] savePartAnalysis: Invalid part object or missing part_name:", part, "Skipping record.");
         continue;
     }
     const idValue = `parca_analiz_${nextIdNum++}`;
@@ -171,15 +232,20 @@ async function savePartAnalysis(base, damage_summary) {
         confidence: String(part.confidence ?? '') 
       });
     } catch (error) {
-        logError("savePartAnalysis: upsert sırasında hata oluştu, part:", part, "idValue:", idValue, "error:", error.message);
+        console.error("[ERROR] savePartAnalysis: Error during upsert for part:", part, "idValue:", idValue, "error:", error.message);
     }
   }
 }
 
-// Kaza analizi kaydı (karşılaştırmalı analiz)
+/**
+ * Saves accident analysis data to Airtable.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {string} content - The content of the accident analysis.
+ * @param {number|string} confidence - The confidence score of the analysis.
+ */
 async function saveAccidentAnalysis(base, content, confidence) {
   if (typeof content !== 'string' || content.trim() === '') {
-    log("saveAccidentAnalysis: Geçersiz veya boş content, kayıt atlanıyor.");
+    console.log("[INFO] saveAccidentAnalysis: Invalid or empty content, skipping save.");
     return;
   }
   try {
@@ -189,13 +255,16 @@ async function saveAccidentAnalysis(base, content, confidence) {
       confidence: String(confidence ?? '') 
     });
   } catch (error) {
-      logError("saveAccidentAnalysis: upsert sırasında hata oluştu, content:", content, "error:", error.message);
+      console.error("[ERROR] saveAccidentAnalysis: Error during upsert for content:", content, "error:", error.message);
   }
 }
 
-// Tabloları temizle
+/**
+ * Clears records from the analysis-related tables in Airtable.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ */
 async function clearAnalysisTables(base) {
-  log('Analiz tabloları temizleniyor...');
+  console.log('[INFO] Clearing analysis tables...');
   const tablesToClear = [
     { name: AIRTABLE_PART_ANALYSIS_TABLE, label: "Parça Analiz Tablosu" },
     { name: AIRTABLE_ACCIDENT_ANALYSIS_TABLE, label: "Kaza Analiz Tablosu" }
@@ -206,101 +275,149 @@ async function clearAnalysisTables(base) {
       const records = await base(table.name).select().all();
       if (records.length > 0) {
         const recordIds = records.map(record => record.id);
-        for (let i = 0; i < recordIds.length; i += 10) {
+        for (let i = 0; i < recordIds.length; i += 10) { // Process in batches of 10
             const batch = recordIds.slice(i, i + 10);
             await base(table.name).destroy(batch);
         }
-        log(`${table.label} (${table.name}) tablosundan ${recordIds.length} kayıt silindi.`);
+        console.log(`[INFO] ${table.label} (${table.name}): ${recordIds.length} records deleted.`);
       } else {
-        log(`${table.label} (${table.name}) tablosunda silinecek kayıt bulunamadı.`);
+        console.log(`[INFO] ${table.label} (${table.name}): No records found to delete.`);
       }
     } catch (error) {
-        logError(`${table.label} (${table.name}) temizlenirken hata oluştu:`, error.message);
+        console.error(`[ERROR] Error clearing ${table.label} (${table.name}):`, error.message);
     }
   }
 }
 
-// Ana analiz fonksiyonu
-export async function analyzeImages(airtableApiKey, baseId) {
-  if (!airtableApiKey || !baseId) {
-    const errorMsg = 'Missing required parameters: airtableApiKey and baseId';
-    logError(errorMsg);
-    throw new Error(errorMsg);
-  }
 
-  const base = new Airtable({ apiKey: airtableApiKey }).base(baseId);
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  try {
+/**
+ * Initializes Airtable and OpenAI clients and clears previous analysis tables.
+ * @param {string} airtableApiKey - API key for Airtable.
+ * @param {string} baseId - Base ID for Airtable.
+ * @returns {Promise<{base: Airtable.Base}>} Airtable base instance.
+ * @throws Will throw an error if API key or base ID is missing.
+ */
+async function initializeAnalysis(airtableApiKey, baseId) {
+    if (!airtableApiKey || !baseId) {
+        const errorMsg = 'Missing required parameters: airtableApiKey and baseId for initialization.';
+        console.error('[ERROR]', errorMsg);
+        throw new Error(errorMsg);
+    }
+    const base = new Airtable({ apiKey: airtableApiKey }).base(baseId);
+    // OpenAI client is initialized within specific analysis functions (analyzePairWithOpenAI, analyzeCarPartWithOpenAI)
+    // as they might have slightly different needs or to ensure statelessness if desired.
     await clearAnalysisTables(base);
-    log('Starting analysis for base:', baseId);
+    console.log('[INFO] Analysis initialized and tables cleared for base:', baseId);
+    return { base };
+}
 
-    const [damaged, reference] = await Promise.all([
-      fetchAirtableRecordsWithBase(base, AIRTABLE_DAMAGED_TABLE),
-      fetchAirtableRecordsWithBase(base, AIRTABLE_REFERENCE_TABLE)
+/**
+ * Fetches damaged and reference data from Airtable and prepares it for analysis.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @returns {Promise<{damagedRecords: Airtable.Record[], referenceByAngle: object}>}
+ */
+async function fetchAndPrepareData(base) {
+    const [damagedRecords, referenceRecords] = await Promise.all([
+        fetchAirtableRecordsWithBase(base, AIRTABLE_DAMAGED_TABLE),
+        fetchAirtableRecordsWithBase(base, AIRTABLE_REFERENCE_TABLE)
     ]);
-    
-    const referenceByAngle = reference.reduce((acc, rec) => {
-      if (rec.fields.angle && rec.fields.hasarsiz_image_url) {
-        acc[rec.fields.angle] = rec.fields.hasarsiz_image_url;
-      }
-      return acc;
-    }, {});
 
-    const results = [];
-    for (const d of damaged) {
-      const { angle, hasarli_image_url: damagedUrl } = d.fields;
-      
-      if (!damagedUrl) {
-        logError('Skipping record without damaged image URL:', d.id);
-        continue;
-      }
-
-      try {
-        let analysisResult;
-        if (angle?.toLowerCase() === 'car part') {
-          log('Starting single part analysis:', damagedUrl);
-          analysisResult = await analyzeSingleWithOpenAI(openai, damagedUrl);
-          if (analysisResult?.damage_summary) {
-            await savePartAnalysis(base, analysisResult.damage_summary);
-          }
-        } else {
-          const referenceUrl = referenceByAngle[angle];
-          if (referenceUrl) {
-            log('Starting comparative analysis:', { damagedUrl, referenceUrl });
-            analysisResult = await analyzePairWithOpenAI(openai, damagedUrl, referenceUrl);
-            if (analysisResult?.content) {
-              await saveAccidentAnalysis(base, analysisResult.content, analysisResult.confidence);
-            }
-          } else {
-            log('No reference image found, performing single analysis:', damagedUrl);
-            analysisResult = await analyzeSingleWithOpenAI(openai, damagedUrl);
-            if (analysisResult?.damage_summary) {
-              await savePartAnalysis(base, analysisResult.damage_summary);
-            }
-          }
+    const referenceByAngle = referenceRecords.reduce((acc, rec) => {
+        if (rec.fields.angle && rec.fields.hasarsiz_image_url) {
+            acc[rec.fields.angle] = rec.fields.hasarsiz_image_url;
         }
-        results.push({ id: d.id, type: angle?.toLowerCase() === 'car part' ? 'single' : 'pair', angle, result: analysisResult });
-      } catch (error) {
-        logError('Analysis failed for record:', d.id, error.message);
-      }
+        return acc;
+    }, {});
+    console.log('[INFO] Data fetched and prepared.');
+    return { damagedRecords, referenceByAngle };
+}
+
+/**
+ * Processes a single damaged record: performs AI analysis and saves results.
+ * @param {Airtable.Record} damagedRecord - The damaged record from Airtable.
+ * @param {Airtable.Base} base - The Airtable base instance.
+ * @param {object} referenceByAngle - Object mapping angles to reference image URLs.
+ * @returns {Promise<object|null>} Analysis result or null if skipped.
+ */
+async function processDamagedRecord(damagedRecord, base, referenceByAngle) {
+    const { angle, hasarli_image_url: damagedUrl, id: recordId } = damagedRecord.fields;
+
+    if (!damagedUrl) {
+        console.error('[ERROR] Skipping record without damaged image URL:', recordId || 'Unknown ID');
+        return null;
     }
 
-    log('Analysis completed:', { 
-      totalRecords: damaged.length, 
-      successfulAnalyses: results.length 
+    let analysisResult;
+    try {
+        if (angle?.toLowerCase() === 'car part') {
+            console.log('[INFO] Starting single car part analysis for URL:', damagedUrl);
+            analysisResult = await analyzeCarPartWithOpenAI(damagedUrl); // Renamed from analyzeSingleWithOpenAI
+            if (analysisResult?.damage_summary) {
+                await savePartAnalysis(base, analysisResult.damage_summary);
+            }
+        } else {
+            const referenceUrl = referenceByAngle[angle];
+            if (referenceUrl) {
+                console.log('[INFO] Starting comparative analysis for URL:', damagedUrl, 'with reference:', referenceUrl);
+                analysisResult = await analyzePairWithOpenAI(damagedUrl, referenceUrl);
+                if (analysisResult?.content) {
+                    await saveAccidentAnalysis(base, analysisResult.content, analysisResult.confidence);
+                }
+            } else {
+                // If no reference URL, fallback to single car part analysis logic for the damaged image.
+                console.log('[INFO] No reference image found for angle', angle, '- performing single analysis on:', damagedUrl);
+                analysisResult = await analyzeCarPartWithOpenAI(damagedUrl); // Fallback to car part style analysis
+                 if (analysisResult?.damage_summary) { // Check for damage_summary as per analyzeCarPartWithOpenAI's expected output
+                    await savePartAnalysis(base, analysisResult.damage_summary);
+                }
+            }
+        }
+        return { id: recordId, type: angle?.toLowerCase() === 'car part' || !referenceByAngle[angle] ? 'single_part_or_fallback' : 'pair', angle, result: analysisResult };
+    } catch (error) {
+        console.error('[ERROR] Analysis failed for record:', recordId || 'Unknown ID', error.message, error.stack);
+        return { id: recordId, type: 'error', angle, error: error.message };
+    }
+}
+
+
+/**
+ * Orchestrates the analysis of images from Airtable, including fetching data,
+ * performing AI analysis, and saving results back to Airtable.
+ * @param {string} airtableApiKey - API key for Airtable.
+ * @param {string} baseId - Base ID for Airtable.
+ * @returns {Promise<object>} An object indicating success, count of results, and the results themselves.
+ */
+export async function analyzeImages(airtableApiKey, baseId) {
+  try {
+    const { base } = await initializeAnalysis(airtableApiKey, baseId);
+    const { damagedRecords, referenceByAngle } = await fetchAndPrepareData(base);
+
+    const analysisPromises = damagedRecords.map(record =>
+        processDamagedRecord(record, base, referenceByAngle)
+    );
+    
+    const results = (await Promise.all(analysisPromises)).filter(r => r !== null);
+
+    console.log('[INFO] All image analyses completed.', {
+      totalRecordsProcessed: damagedRecords.length,
+      successfulAnalyses: results.filter(r => !r.error).length,
+      failedAnalyses: results.filter(r => r.error).length,
     });
     return { success: true, results_count: results.length, results };
   } catch (error) {
-    logError('Analysis failed:', error.message);
-    throw error;
+    console.error('[ERROR] Overall analysis process failed:', error.message, error.stack);
+    throw error; // Re-throw to be caught by the route handler
   }
 }
 
-// Tabloları temizleme fonksiyonu
+/**
+ * Public function to clear analysis tables in Airtable.
+ * @param {string} airtableApiKey - API key for Airtable.
+ * @param {string} baseId - Base ID for Airtable.
+ */
 export async function clearTables(airtableApiKey, baseId) {
   if (!airtableApiKey || !baseId) {
-    throw new Error('airtableApiKey ve baseId zorunlu.');
+    throw new Error('Airtable API key and Base ID are required to clear tables.');
   }
 
   const base = new Airtable({ apiKey: airtableApiKey }).base(baseId);
@@ -309,7 +426,7 @@ export async function clearTables(airtableApiKey, baseId) {
     const result = await clearAnalysisTables(base);
     return result;
   } catch (e) {
-    logError('Tablo temizleme hatası:', e.message);
+    console.error('[ERROR] Tablo temizleme hatası:', e.message);
     throw e;
   }
-} 
+}

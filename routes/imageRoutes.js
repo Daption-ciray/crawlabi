@@ -36,10 +36,11 @@ router.post('/analyze', validateUrls, async (req, res) => {
 
     } catch (error) {
         console.error('Error in /analyze endpoint:', error);
-        return res.status(500).json({
-            error: 'Internal server error',
-            message: error.message
-        });
+        // Add statusCode if not present, or for specific error types
+        if (!error.statusCode) {
+            error.statusCode = 500; 
+        }
+        next(error); // Pass to global error handler
     }
 });
 
@@ -75,10 +76,11 @@ router.post('/damage-analyze', validateUrls, async (req, res) => {
 
     } catch (error) {
         console.error('Error in /damage-analyze endpoint:', error);
-        return res.status(500).json({
-            error: 'Internal server error',
-            message: error.message
-        });
+        // Add statusCode if not present, or for specific error types
+        if (!error.statusCode) {
+            error.statusCode = 500;
+        }
+        next(error); // Pass to global error handler
     }
 });
 

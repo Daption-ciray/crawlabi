@@ -18,22 +18,25 @@ const accessLogStream = fs.createWriteStream(
     { flags: 'a' }
 );
 
-// Morgan format'ını özelleştir
+// Custom Morgan token to log request body for POST/PUT requests
 morgan.token('body', (req) => {
     if (req.method === 'POST' || req.method === 'PUT') {
+        // Truncate long request bodies if necessary, or selectively log fields
+        // For now, logging the full body (up to Express's limit)
         return JSON.stringify(req.body, null, 2);
     }
     return '';
 });
 
+// Custom Morgan token to log response time with high precision
 morgan.token('response-time-ms', (req, res) => {
-    if (!res._header || !req._startAt) return '';
+    if (!res._header || !req._startAt) return ''; // Check if timing headers are set
     const diff = process.hrtime(req._startAt);
-    const ms = diff[0] * 1e3 + diff[1] * 1e-6;
-    return ms.toFixed(2);
+    const ms = diff[0] * 1e3 + diff[1] * 1e-6; // Convert hrtime to milliseconds
+    return ms.toFixed(2); // Format to 2 decimal places
 });
 
-// Özel log formatı
+// Custom log format string for Morgan
 const logFormat = ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent" :response-time-ms ms\nRequest Body: :body\n';
 
 // Morgan middleware'ini oluştur

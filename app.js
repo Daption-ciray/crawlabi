@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import compression from 'compression';
+// import compression from 'compression'; // Removed as it's not used
 import dotenv from 'dotenv';
 dotenv.config();
 

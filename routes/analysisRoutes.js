@@ -8,7 +8,8 @@ router.post('/compare_images', async (req, res) => {
     const { airtableApiKey, baseId } = req.body;
     const result = await analyzeImages(airtableApiKey, baseId);
     
-    // Silinen kayıt sayılarını log'dan çıkar
+    // Attempt to parse cleared record counts from log messages within the result.
+    // This is a temporary solution and ideally, structured data should be returned.
     const clearedCounts = {
       part_analysis: parseInt(result.logs?.find(log => log.includes('parca analiz'))?.match(/\d+/)?.[0] || '0'),
       accident_analysis: parseInt(result.logs?.find(log => log.includes('Kaza Analiz Tablosu'))?.match(/\d+/)?.[0] || '0')
@@ -19,12 +20,10 @@ router.post('/compare_images', async (req, res) => {
       cleared_records: clearedCounts
     });
   } catch (error) {
-    console.error('Analysis route error:', error);
-    res.status(500).json({
-      error: error.message || 'Internal server error',
-      status: 500,
-      timestamp: new Date().toISOString()
-    });
+    console.error('Error in /compare_images route:', error); // Log specific route context
+    // Optionally add a statusCode to the error if it's a specific known type
+    // e.g., if (error instanceof SpecificServiceError) error.statusCode = 4xx;
+    next(error); // Pass to global error handler
   }
 });
 
