@@ -9,7 +9,6 @@ import { morganMiddleware, errorLogger, consoleLogger } from './middleware/logge
 import imageRoutes from './routes/imageRoutes.js';
 import scraperRoutes from './routes/scraper.js';
 import analysisRoutes from './routes/analysisRoutes.js';
-import cropperRoutes from './routes/cropperRoutes.js';
 
 const app = express();
 
@@ -38,7 +37,6 @@ app.use(consoleLogger);
 app.use('/api', imageRoutes);
 app.use('/api/scraper', scraperRoutes);
 app.use('/api/analysis', analysisRoutes);
-app.use('/api/cropper', cropperRoutes);
 
 // Error handling middleware
 app.use(errorLogger);
@@ -68,7 +66,6 @@ app.listen(PORT, () => {
     console.log(`DELETE http://localhost:${PORT}/api/scraper/cache`);
     console.log(`GET http://localhost:${PORT}/api/scraper/status`);
     console.log(`POST http://localhost:${PORT}/api/analysis/compare_images`);
-    console.log(`POST http://localhost:${PORT}/api/cropper/crop-analyze`);
     console.log('\n📂 Logs:');
     console.log(`- Access logs: ./logs/access.log`);
     console.log(`- Error logs: ./logs/error.log`);
