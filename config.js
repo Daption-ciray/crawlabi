@@ -63,6 +63,10 @@ Strictly use one of the provided options for the angle and damage_severity. The 
         retryDelay: parseInt(process.env.ANALYZER_RETRY_DELAY, 10) || 1000,
         maxPerMinute: parseInt(process.env.ANALYZER_MAX_PER_MINUTE, 10) || 18
     },
+    cloudconvert: {
+        apiKey: process.env.CLOUDCONVERT_API_KEY,
+        apiUrl: 'https://api.cloudconvert.com/v2'
+    },
     scraper: { // From scraper.js
         cacheTTL: parseInt(process.env.SCRAPER_CACHE_TTL_SECONDS, 10) || 1800, // stdTTL in seconds
         launchArgs: process.env.SCRAPER_LAUNCH_ARGS ? process.env.SCRAPER_LAUNCH_ARGS.split(' ') : [
