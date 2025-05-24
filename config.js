@@ -45,26 +45,6 @@ Strictly use one of the provided options for the angle and damage_severity. The 
             singlePartAssessment: `You are a certified vehicle damage assessment expert.\n\nYou will receive a photo showing part(s) of a damaged vehicle. This could be a zoomed-in photo of a single part or a wide view (e.g., hood open) showing multiple parts.\n\nYour tasks:\n1. Identify all visible vehicle parts that appear damaged in the image.\n2. For each damaged part, provide:\n   - "part_name": The name of the damaged part (e.g., "Coolant reservoir", "Radiator support").\n   - "visible_damage": A short description of the damage (e.g., "Cracked and leaking").\n   - "recommendation": One of "Replace", "Repair", or "No damage".\n   - "confidence": A whole number between 0 and 100 representing how confident you are that this specific part is damaged as described.\n\nYour output must be a valid JSON object in the following format:\n{\n  "damage_summary": [\n    {\n      "part_name": "Coolant reservoir",\n      "visible_damage": "Cracked and leaking around the cap",\n      "recommendation": "Replace",\n      "confidence": 92\n    },\n    {\n      "part_name": "Radiator support bracket",\n      "visible_damage": "Bent mounting plate with rust",\n      "recommendation": "Repair",\n      "confidence": 85\n    }\n  ]\n}`
         }
     },
-    cropper: {
-        uploadDir: process.env.CROPPER_UPLOAD_DIR || 'uploads',
-        croppedDir: process.env.CROPPER_CROPPED_DIR || 'cropped',
-        maxFileSizeMB: parseInt(process.env.CROPPER_MAX_FILE_SIZE_MB, 10) || 5,
-        cropAreas: [ // From cropperRoutes.js
-            {
-                label: 'sürücü görüşleri',
-                box: { x: 50, y: 1150, width: 10000, height: 2500 }
-            },
-            {
-                label: 'çarpışma yerinin ve anının taslağını çiziniz',
-                box: { x: 29, y: 1000, width: 900, height: 190 }
-            }
-        ],
-        prompts: { // Prompts from cropperRoutes.js
-            driverStatements: 'Bu alan bir trafik kazası tespit tutanağında sürücülerin kendi el yazılarıyla kazayla ilgili görüşlerini yazdıkları bölümdür. OCR ile metni olduğu gibi çıkar. Sürücü A ve Sürücü B metinlerini ayır ve aynen yaz. Yorum yapma, sadece metni olduğu gibi döndür.',
-            accidentSketch: 'Bu alan bir trafik kazası tespit tutanağında sürücülerin kazanın nasıl gerçekleştiğini çizerek gösterdikleri kroki bölümüdür. Krokideki araçların konumunu, yönünü, çarpışma noktasını ve kazanın nasıl gerçekleştiğini şemadan çıkar ve detaylıca açıkla. Eğer kroki eksik veya anlaşılmazsa belirt.',
-            defaultAreaAnalysis: 'Bu alanı detaylı analiz et. İçeriği, yazıları ve varsa krokiyi açıkla.'
-        }
-    },
     analyzer_settings: { // From imageAnalyzer.js
         validAngles: [
             'Front', 'Rear', 'Left', 'Right', 'Interior',
