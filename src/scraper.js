@@ -1,13 +1,9 @@
 import { chromium } from 'playwright-extra';
-import stealth from 'playwright-extra/plugins/stealth/index.js';
 import NodeCache from 'node-cache';
 import config from '../config.js'; // Import config
 
 // Initialize cache with TTL from config
 const cache = new NodeCache({ stdTTL: config.scraper.cacheTTL });
-
-// Add stealth plugin
-chromium.use(stealth());
 
 /**
  * ScraperService class provides methods to scrape web pages using Playwright.
@@ -293,4 +289,28 @@ class ScraperService {
     }
 }
 
-export const scraperService = new ScraperService(); 
+export const scraperService = new ScraperService();
+
+/**
+ * Çoklu URL'leri batch'leyip asenkron işleyen, sonuçları temizleyen fonksiyon.
+ * @param {string[]} urls - İşlenecek URL listesi
+ * @param {function} processFn - Her bir URL için çağrılacak asenkron fonksiyon (ör: crop, scrape)
+ * @param {number} batchSize - Kaçlı batch'ler halinde işlenecek (default: 10)
+ * @returns {Promise<Array>} - Temizlenmiş, duplicate ve null olmayan sonuçlar
+ */
+export async function processUrlsInBatches(urls, processFn, batchSize = 10) {
+    const results = [];
+    for (let i = 0; i < urls.length; i += batchSize) {
+        const batch = urls.slice(i, i + batchSize);
+        // Her batch'i aynı anda işle
+        const batchResults = await Promise.all(batch.map(url => processFn(url)));
+        results.push(...batchResults);
+    }
+    // Null ve duplicate'ları temizle
+    const cleaned = Array.from(
+        new Set(
+            results.filter(x => x != null && x !== undefined)
+        )
+    );
+    return cleaned;
+} 

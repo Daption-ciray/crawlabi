@@ -311,63 +311,29 @@ async function clearTablesOnce() {
 }
 
 /**
- * Analyzes a single image to determine its angle and general description.
- * @param {string} imageUrl - The URL of the image to analyze.
- * @returns {Promise<object>} A promise that resolves to an analysis object.
- *                            The object includes angle, description, confidence, and potentially an error.
- */
-async function analyzeImage(imageUrl, extraFields = {}) {
-    await clearTablesOnce();
-    const prompt = appConfig.openai.prompts.analyzeImage;
-    const result = await performImageAnalysis(imageUrl, prompt, false);
-    // Airtable mapping (Hasarsız tablo)
-    const nextId = await getNextAirtableId(appConfig.airtable.referenceTable || 'Hasarsız', 'hasarsiz_arac_id', 'hasarsiz_arac_');
-    const fields = {
-        hasarsiz_arac_id: nextId,
-        angle: result.angle,
-        confidence: result.confidence,
-        hasarsiz_image_url: imageUrl,
-        notes: result.description
-    };
-    // Tablo adı config'ten
-    const table = appConfig.airtable.referenceTable || 'Hasarsız';
-    await saveToAirtable({ table, fields });
-    return result;
-}
-
-/**
  * Analyzes a batch of images to determine their angles and general descriptions.
  * @param {string[]} imageUrls - An array of image URLs to analyze.
  * @returns {Promise<object>} A promise that resolves to an object containing results, errors, and a summary.
  */
 async function analyzeImages(imageUrls) {
-    return processBatchAnalysis(imageUrls, analyzeImage);
-}
-
-/**
- * Analyzes a single image for specific damage assessment.
- * @param {string} imageUrl - The URL of the image to analyze for damage.
- * @returns {Promise<object>} A promise that resolves to an analysis object.
- *                            The object includes angle, damage description, severity, confidence, and potentially an error.
- */
-async function analyzeDamage(imageUrl, extraFields = {}) {
-    await clearTablesOnce();
-    const prompt = appConfig.openai.prompts.analyzeDamage;
-    const result = await performImageAnalysis(imageUrl, prompt, true);
-    // Airtable mapping (Hasarlı tablo)
-    const nextId = await getNextAirtableId(appConfig.airtable.damagedTable || 'Hasarlı', 'hasarli_arac_id', 'hasarli_arac_');
-    const fields = {
-        hasarli_arac_id: nextId,
-        angle: result.angle,
-        damage_severity: result.damage_severity,
-        confidence: result.confidence,
-        damage_description: result.description,
-        hasarli_image_url: imageUrl
-    };
-    // Tablo adı config'ten
-    const table = appConfig.airtable.damagedTable || 'Hasarlı';
-    await saveToAirtable({ table, fields });
-    return result;
+    return processBatchAnalysis(imageUrls, async (imageUrl) => {
+        await clearTablesOnce();
+        const prompt = appConfig.openai.prompts.analyzeImage;
+        const result = await performImageAnalysis(imageUrl, prompt, false);
+        // Airtable mapping (Hasarsız tablo)
+        const nextId = await getNextAirtableId(appConfig.airtable.referenceTable || 'Hasarsız', 'hasarsiz_arac_id', 'hasarsiz_arac_');
+        const fields = {
+            hasarsiz_arac_id: nextId,
+            angle: result.angle,
+            confidence: String(result.confidence),
+            hasarsiz_image_url: imageUrl,
+            notes: result.description
+        };
+        // Tablo adı config'ten
+        const table = appConfig.airtable.referenceTable || 'Hasarsız';
+        await saveToAirtable({ table, fields });
+        return result;
+    });
 }
 
 /**
@@ -376,15 +342,29 @@ async function analyzeDamage(imageUrl, extraFields = {}) {
  * @returns {Promise<object>} A promise that resolves to an object containing results, errors, and a summary.
  */
 async function analyzeDamages(imageUrls) {
-    return processBatchAnalysis(imageUrls, analyzeDamage);
+    return processBatchAnalysis(imageUrls, async (imageUrl) => {
+        await clearTablesOnce();
+        const prompt = appConfig.openai.prompts.analyzeDamage;
+        const result = await performImageAnalysis(imageUrl, prompt, true);
+        // Airtable mapping (Hasarlı tablo)
+        const nextId = await getNextAirtableId(appConfig.airtable.damagedTable || 'Hasarlı', 'hasarli_arac_id', 'hasarli_arac_');
+        const fields = {
+            hasarli_arac_id: nextId,
+            angle: result.angle,
+            damage_severity: result.damage_severity,
+            confidence: String(result.confidence),
+            damage_description: result.description,
+            hasarli_image_url: imageUrl
+        };
+        // Tablo adı config'ten
+        const table = appConfig.airtable.damagedTable || 'Hasarlı';
+        await saveToAirtable({ table, fields });
+        return result;
+    });
 }
 
 export {
-    analyzeImage,
     analyzeImages,
-    analyzeDamage,
     analyzeDamages,
-    // Exporting for potential use in analysisService if direct OpenAI call is needed with specific configurations
-    // However, prefer using the specific analysis functions like analyzeDamage or analyzeImage.
     callOpenAI
 };
