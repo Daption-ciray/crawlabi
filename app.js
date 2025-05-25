@@ -14,6 +14,7 @@ import imageRoutes from './routes/imageRoutes.js';
 import scraperRoutes from './routes/scraper.js';
 import analysisRoutes from './routes/analysisRoutes.js';
 import pdfDamageRoutes from './routes/pdfDamageRoutes.js';
+import reportRoutes from './routes/reportRoutes.js';
 
 const UPLOAD_DIR_PDF = path.join(process.cwd(), 'uploads_pdf');
 
@@ -65,6 +66,7 @@ clearDirectory(UPLOAD_DIR_PDF).then(() => {
     app.use('/api/scraper', scraperRoutes);
     app.use('/api/analysis', analysisRoutes);
     app.use('/api/pdf', pdfDamageRoutes);
+    app.use('/api/report', reportRoutes);
 
     // Error handling middleware
     app.use(errorLogger);
