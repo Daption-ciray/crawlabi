@@ -2,11 +2,17 @@ import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
+import archiver from 'archiver';
 import appConfig from '../config.js';
 import path from 'path';
 import os from 'os';
 import { createCanvas } from 'canvas';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+
+// Attempting with createRequire for pdfjs-dist legacy build.
 
 const CLOUDCONVERT_API_KEY = appConfig.cloudconvert.apiKey;
 const CLOUDCONVERT_API_URL = appConfig.cloudconvert.apiUrl;
@@ -17,7 +23,7 @@ const CLOUDCONVERT_API_URL = appConfig.cloudconvert.apiUrl;
  * Otherwise, uses CloudConvert API.
  * @param {string} pdfFilePath - The local path to the PDF file.
  * @param {string} [jobType] - 'converter' or 'kaza_analiz' (or other CloudConvert jobs).
- * @returns {Promise<string[]|object>} - Array of image file paths (for local conversion) or image URLs (for CloudConvert).
+ * @returns {Promise<string[]|string>} - Array of image URLs (for CloudConvert) or path to the zip file (for local 'converter' job).
  */
 async function convertPdfToImages(pdfFilePath, jobType = 'kaza_analiz') {
     if (jobType === 'converter') {
@@ -28,7 +34,8 @@ async function convertPdfToImages(pdfFilePath, jobType = 'kaza_analiz') {
         }
         try {
             const data = new Uint8Array(await fsp.readFile(pdfFilePath));
-            const pdf = await pdfjsLib.getDocument({ data }).promise;
+            const loadingTask = pdfjsLib.getDocument({ data });
+            const pdf = await loadingTask.promise;
             const numPages = pdf.numPages;
             const imagePaths = [];
             for (let pageNum = 1; pageNum <= numPages; pageNum++) {
@@ -48,15 +55,77 @@ async function convertPdfToImages(pdfFilePath, jobType = 'kaza_analiz') {
                 imagePaths.push(outPath);
             }
             console.log(`[pdfConverterService] pdfjs-dist conversion successful. Images saved to: ${outputDir}`);
-            return imagePaths;
+            
+            const zipFileName = `pdf_images_${path.basename(pdfFilePath, path.extname(pdfFilePath))}_${Date.now()}.zip`;
+            const zipFilePath = path.join(os.tmpdir(), zipFileName);
+            const outputZip = fs.createWriteStream(zipFilePath);
+            const archive = archiver('zip', {
+                zlib: { level: 9 } // Sets the compression level.
+            });
+
+            return new Promise((resolve, reject) => {
+                outputZip.on('close', () => {
+                    console.log(`[pdfConverterService] Zip file created: ${zipFilePath} (${archive.pointer()} total bytes)`);
+                    // Clean up the temporary image directory
+                    fsp.rm(outputDir, { recursive: true, force: true })
+                        .then(() => {
+                            console.log(`[pdfConverterService] Cleaned up temporary image directory: ${outputDir}`);
+                            resolve(zipFilePath);
+                        })
+                        .catch(err => {
+                            console.error(`[pdfConverterService] Error cleaning up temp directory ${outputDir}:`, err);
+                            // Resolve with zip path anyway, as zipping was successful
+                            resolve(zipFilePath);
+                        });
+                });
+
+                archive.on('warning', (err) => {
+                    if (err.code === 'ENOENT') {
+                        console.warn('[pdfConverterService] Archiver warning: ', err);
+                    } else {
+                        reject(err);
+                    }
+                });
+
+                archive.on('error', (err) => {
+                    // Attempt to clean up the outputDir even if zipping fails
+                    if (fs.existsSync(outputDir)) {
+                        fsp.rm(outputDir, { recursive: true, force: true }).catch(cleanupErr => {
+                           console.error(`[pdfConverterService] Error during cleanup after zip failure for ${outputDir}:`, cleanupErr);
+                        });
+                    }
+                    // also attempt to delete partially created zip file
+                    if (fs.existsSync(zipFilePath)) {
+                        fsp.unlink(zipFilePath).catch(cleanupErr => {
+                            console.error(`[pdfConverterService] Error deleting partial zip ${zipFilePath} after failure:`, cleanupErr);
+                        });
+                    }
+                    reject(new Error(`Zipping failed: ${err.message}`));
+                });
+
+                archive.pipe(outputZip);
+
+                imagePaths.forEach(imgPath => {
+                    archive.file(imgPath, { name: path.basename(imgPath) });
+                });
+
+                archive.finalize();
+            });
+
         } catch (error) {
-            console.error('[pdfConverterService] pdfjs-dist conversion error details:', error);
-            if (fs.existsSync(outputDir)) {
+            console.error('[pdfConverterService] pdfjs-dist conversion or zipping error details:', error);
+            // If the error is not from zipping (e.g. pdf rendering failed), outputDir might still exist.
+            // If the error IS from zipping, the 'archive.on('error')' handler above should have tried to clean it.
+            // This is a fallback.
+            if (fs.existsSync(outputDir) && !(error.message && error.message.startsWith('Zipping failed'))) {
                 try {
                     await fsp.rm(outputDir, { recursive: true, force: true });
-                } catch {}
+                     console.log(`[pdfConverterService] Cleaned up ${outputDir} in main catch block after error: ${error.message}`);
+                } catch (cleanupErr) {
+                    console.error(`[pdfConverterService] Error cleaning up ${outputDir} in main catch block:`, cleanupErr);
+                }
             }
-            throw new Error(`Local PDF conversion with pdfjs-dist/canvas failed: ${error.message || error}`);
+            throw new Error(`Local PDF conversion and zipping process failed: ${error.message || error}`);
         }
     } else {
         // CloudConvert ile devam et (mevcut kod olduğu gibi kalacak)
