@@ -231,15 +231,108 @@ async function processBatchAnalysis(imageUrls, analysisFn) {
     return { results, errors, summary };
 }
 
+// Airtable kayıt fonksiyonu
+async function saveToAirtable({ table, fields }) {
+    const apiKey = appConfig.airtable.apiKey;
+    const baseId = appConfig.airtable.baseId;
+    if (!apiKey || !baseId) {
+        throw new Error('Airtable API anahtarı veya Base ID eksik!');
+    }
+    const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
+    try {
+        const response = await axios.post(url, { fields }, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        return response.data;
+    } catch (error) {
+        console.error('Airtable kayıt hatası:', error.response?.data || error.message);
+        throw error;
+    }
+}
+
+// Airtable'da ilgili tablodaki tüm kayıtları silen yardımcı fonksiyon
+async function clearAirtableTable(table) {
+    const apiKey = appConfig.airtable.apiKey;
+    const baseId = appConfig.airtable.baseId;
+    const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
+    // Tüm kayıtları çek
+    const records = await axios.get(url, {
+        headers: {
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+    const ids = records.data.records.map(r => r.id);
+    // 10'lu gruplar halinde sil
+    for (let i = 0; i < ids.length; i += 10) {
+        const batch = ids.slice(i, i + 10);
+        await axios.delete(url, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`
+            },
+            params: { 'records[]': batch }
+        });
+    }
+}
+
+// Tabloya yeni ID üret (ör: hasarli_arac_1, hasarli_arac_2, ...)
+async function getNextAirtableId(table, idField, prefix) {
+    const apiKey = appConfig.airtable.apiKey;
+    const baseId = appConfig.airtable.baseId;
+    const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
+    const records = await axios.get(url, {
+        headers: {
+            Authorization: `Bearer ${apiKey}`
+        }
+    });
+    let max = 0;
+    for (const rec of records.data.records) {
+        const val = rec.fields[idField];
+        if (typeof val === 'string' && val.startsWith(prefix)) {
+            const num = parseInt(val.replace(prefix, ''), 10);
+            if (!isNaN(num) && num > max) {
+                max = num;
+            }
+        }
+    }
+    return `${prefix}${max + 1}`;
+}
+
+// Sistemi başlatırken tablolardaki kayıtları temizle (bir kere çalışsın)
+let tablesCleared = false;
+async function clearTablesOnce() {
+    if (!tablesCleared) {
+        await clearAirtableTable(appConfig.airtable.damagedTable || 'Hasarlı');
+        await clearAirtableTable(appConfig.airtable.referenceTable || 'Hasarsız');
+        tablesCleared = true;
+    }
+}
+
 /**
  * Analyzes a single image to determine its angle and general description.
  * @param {string} imageUrl - The URL of the image to analyze.
  * @returns {Promise<object>} A promise that resolves to an analysis object.
  *                            The object includes angle, description, confidence, and potentially an error.
  */
-async function analyzeImage(imageUrl) {
-    const prompt = appConfig.openai.prompts.analyzeImage; // Using prompt from appConfig
-    return performImageAnalysis(imageUrl, prompt, false);
+async function analyzeImage(imageUrl, extraFields = {}) {
+    await clearTablesOnce();
+    const prompt = appConfig.openai.prompts.analyzeImage;
+    const result = await performImageAnalysis(imageUrl, prompt, false);
+    // Airtable mapping (Hasarsız tablo)
+    const nextId = await getNextAirtableId(appConfig.airtable.referenceTable || 'Hasarsız', 'hasarsiz_arac_id', 'hasarsiz_arac_');
+    const fields = {
+        hasarsiz_arac_id: nextId,
+        angle: result.angle,
+        confidence: result.confidence,
+        hasarsiz_image_url: imageUrl,
+        notes: result.description
+    };
+    // Tablo adı config'ten
+    const table = appConfig.airtable.referenceTable || 'Hasarsız';
+    await saveToAirtable({ table, fields });
+    return result;
 }
 
 /**
@@ -257,9 +350,24 @@ async function analyzeImages(imageUrls) {
  * @returns {Promise<object>} A promise that resolves to an analysis object.
  *                            The object includes angle, damage description, severity, confidence, and potentially an error.
  */
-async function analyzeDamage(imageUrl) {
-    const prompt = appConfig.openai.prompts.analyzeDamage; // Using prompt from appConfig
-    return performImageAnalysis(imageUrl, prompt, true);
+async function analyzeDamage(imageUrl, extraFields = {}) {
+    await clearTablesOnce();
+    const prompt = appConfig.openai.prompts.analyzeDamage;
+    const result = await performImageAnalysis(imageUrl, prompt, true);
+    // Airtable mapping (Hasarlı tablo)
+    const nextId = await getNextAirtableId(appConfig.airtable.damagedTable || 'Hasarlı', 'hasarli_arac_id', 'hasarli_arac_');
+    const fields = {
+        hasarli_arac_id: nextId,
+        angle: result.angle,
+        damage_severity: result.damage_severity,
+        confidence: result.confidence,
+        damage_description: result.description,
+        hasarli_image_url: imageUrl
+    };
+    // Tablo adı config'ten
+    const table = appConfig.airtable.damagedTable || 'Hasarlı';
+    await saveToAirtable({ table, fields });
+    return result;
 }
 
 /**

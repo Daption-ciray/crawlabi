@@ -77,21 +77,9 @@ async function analyzePairWithOpenAI(damagedUrl, referenceUrl) {
     const text = response.choices[0].message.content;
     return JSON.parse(text);
   } catch (parseError) {
-    // Error handling for JSON parsing, similar to original
-    console.error("[ERROR] analyzePairWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text before parse attempt:", response?.choices?.[0]?.message?.content);
-    const rawText = response?.choices?.[0]?.message?.content;
-    if (rawText) {
-        const match = rawText.match(/\{[\s\S]*\}/);
-        if (match && match[0]) {
-            try {
-                return JSON.parse(match[0]);
-            } catch (regexParseError) {
-                console.error("[ERROR] analyzePairWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
-                return { error: "OpenAI response not in JSON format after regex", raw: rawText, matched: match[0] };
-            }
-        }
-    }
-    return { error: "OpenAI response not in JSON format or missing content", raw: rawText };
+    // response değişkeni burada yok, sadece parseError üzerinden logla
+    console.error("[ERROR] analyzePairWithOpenAI - OpenAI response JSON parse error:", parseError.message);
+    return { error: "OpenAI response not in JSON format or missing content" };
   }
 }
 
@@ -128,20 +116,8 @@ async function analyzeCarPartWithOpenAI(damagedUrl) {
     const text = response.choices[0].message.content;
     return JSON.parse(text);
   } catch (parseError) {
-    console.error("[ERROR] analyzeCarPartWithOpenAI - OpenAI response JSON parse error:", parseError.message, "Raw text before parse attempt:", response?.choices?.[0]?.message?.content);
-    const rawText = response?.choices?.[0]?.message?.content;
-     if (rawText) {
-        const match = rawText.match(/\{[\s\S]*\}/);
-        if (match && match[0]) {
-            try {
-                return JSON.parse(match[0]);
-            } catch (regexParseError) {
-                console.error("[ERROR] analyzeCarPartWithOpenAI - OpenAI response JSON parse error after regex:", regexParseError.message, "Matched text:", match[0]);
-                return { error: "OpenAI response not in JSON format after regex", raw: rawText, matched: match[0] };
-            }
-        }
-    }
-    return { error: "OpenAI response not in JSON format or missing content", raw: rawText };
+    console.error("[ERROR] analyzeCarPartWithOpenAI - OpenAI response JSON parse error:", parseError.message);
+    return { error: "OpenAI response not in JSON format or missing content" };
   }
 }
 
@@ -292,20 +268,18 @@ async function clearAnalysisTables(base) {
 
 /**
  * Initializes Airtable and OpenAI clients and clears previous analysis tables.
- * @param {string} airtableApiKey - API key for Airtable.
- * @param {string} baseId - Base ID for Airtable.
  * @returns {Promise<{base: Airtable.Base}>} Airtable base instance.
  * @throws Will throw an error if API key or base ID is missing.
  */
-async function initializeAnalysis(airtableApiKey, baseId) {
-    if (!airtableApiKey || !baseId) {
-        const errorMsg = 'Missing required parameters: airtableApiKey and baseId for initialization.';
+async function initializeAnalysis() {
+    const apiKey = config.airtable.apiKey;
+    const baseId = config.airtable.baseId;
+    if (!apiKey || !baseId) {
+        const errorMsg = 'Airtable API anahtarı veya Base ID eksik!';
         console.error('[ERROR]', errorMsg);
         throw new Error(errorMsg);
     }
-    const base = new Airtable({ apiKey: airtableApiKey }).base(baseId);
-    // OpenAI client is initialized within specific analysis functions (analyzePairWithOpenAI, analyzeCarPartWithOpenAI)
-    // as they might have slightly different needs or to ensure statelessness if desired.
+    const base = new Airtable({ apiKey }).base(baseId);
     await clearAnalysisTables(base);
     console.log('[INFO] Analysis initialized and tables cleared for base:', baseId);
     return { base };
@@ -383,13 +357,11 @@ async function processDamagedRecord(damagedRecord, base, referenceByAngle) {
 /**
  * Orchestrates the analysis of images from Airtable, including fetching data,
  * performing AI analysis, and saving results back to Airtable.
- * @param {string} airtableApiKey - API key for Airtable.
- * @param {string} baseId - Base ID for Airtable.
  * @returns {Promise<object>} An object indicating success, count of results, and the results themselves.
  */
-export async function analyzeImages(airtableApiKey, baseId) {
+export async function analyzeImages() {
   try {
-    const { base } = await initializeAnalysis(airtableApiKey, baseId);
+    const { base } = await initializeAnalysis();
     const { damagedRecords, referenceByAngle } = await fetchAndPrepareData(base);
 
     const analysisPromises = damagedRecords.map(record =>
@@ -412,16 +384,14 @@ export async function analyzeImages(airtableApiKey, baseId) {
 
 /**
  * Public function to clear analysis tables in Airtable.
- * @param {string} airtableApiKey - API key for Airtable.
- * @param {string} baseId - Base ID for Airtable.
  */
-export async function clearTables(airtableApiKey, baseId) {
-  if (!airtableApiKey || !baseId) {
+export async function clearTables() {
+  const apiKey = config.airtable.apiKey;
+  const baseId = config.airtable.baseId;
+  if (!apiKey || !baseId) {
     throw new Error('Airtable API key and Base ID are required to clear tables.');
   }
-
-  const base = new Airtable({ apiKey: airtableApiKey }).base(baseId);
-  
+  const base = new Airtable({ apiKey }).base(baseId);
   try {
     const result = await clearAnalysisTables(base);
     return result;
