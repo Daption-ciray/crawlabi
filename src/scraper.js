@@ -1,6 +1,5 @@
-import { chromium } from 'playwright';
-import playwright from 'playwright-extra';
-import stealth from 'puppeteer-extra-plugin-stealth';
+import { chromium } from 'playwright-extra';
+import stealth from 'playwright-extra/plugins/stealth/index.js';
 import NodeCache from 'node-cache';
 import config from '../config.js'; // Import config
 
@@ -8,7 +7,7 @@ import config from '../config.js'; // Import config
 const cache = new NodeCache({ stdTTL: config.scraper.cacheTTL });
 
 // Add stealth plugin
-playwright.chromium.use(stealth());
+chromium.use(stealth());
 
 /**
  * ScraperService class provides methods to scrape web pages using Playwright.
@@ -39,7 +38,7 @@ class ScraperService {
     async initialize() {
         if (!this.browser) {
             console.log('ScraperService: Initializing new browser instance...');
-            this.browser = await playwright.chromium.launch({
+            this.browser = await chromium.launch({
                 headless: true,
                 args: config.scraper.launchArgs // Launch args from config
             });
