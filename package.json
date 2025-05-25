@@ -7,7 +7,7 @@
     "start": "node app.js",
     "dev": "nodemon app.js",
     "scrape": "node src/scraper.js",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest"
+    "test": "set NODE_OPTIONS=--experimental-vm-modules && jest"
   },
   "dependencies": {
     "airtable": "^0.12.2",
@@ -23,7 +23,7 @@
     "openai": "^4.30.0",
     "pdf-poppler": "^0.2.1",
     "pdf2pic": "^3.1.4",
-    "pdfjs-dist": "^3.11.174",
+    "pdfjs-dist": "^2.16.105",
     "playwright": "^1.42.1",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
