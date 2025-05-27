@@ -156,6 +156,7 @@ class ScraperService {
      * @param {boolean} [options.blockAds=true] - Whether to block ads.
      * @param {boolean} [options.blockTrackers=true] - Whether to block trackers.
      * @param {boolean} [options.blockMedia=false] - Whether to block media.
+     * @param {number} [options.limit=Infinity] - Maximum number of items to scrape across all selectors where `multiple: true`. Scraping stops once this limit is reached.
      * @returns {Promise<object>} An object containing the scraped data, keyed by selector names.
      */
     async scrape(url, selectors, options = {}) {
@@ -165,10 +166,11 @@ class ScraperService {
             useCache = true,
             blockAds = true,
             blockTrackers = true,
-            blockMedia = false
+            blockMedia = false,
+            limit = Infinity
         } = options;
 
-        const cacheKey = `${url}-${JSON.stringify(selectors)}`;
+        const cacheKey = `${url}-${JSON.stringify(selectors)}-limit:${limit}`;
         
         if (useCache) {
             const cachedResult = cache.get(cacheKey);
@@ -197,6 +199,7 @@ class ScraperService {
                 }
 
                 const results = {};
+                let totalScrapedMultipleItems = 0;
                 
                 for (const selector of selectors) {
                     if (!selector || !selector.query || !selector.name || !selector.type) {
@@ -212,12 +215,25 @@ class ScraperService {
                         } else if (selector.type === 'count') {
                             results[selector.name] = elements.length;
                         } else if (selector.multiple) {
-                            if (elements.length > 0) {
-                                results[selector.name] = await Promise.all(
-                                    elements.map(el => this._extractDataFromElement(el, selector.type, selector.attribute))
-                                );
+                            if (totalScrapedMultipleItems >= limit) {
+                                results[selector.name] = [];
                             } else {
-                                results[selector.name] = []; // Consistent empty array for 'multiple' if no elements
+                                if (elements.length > 0) {
+                                    const itemsToPotentiallyTake = elements.length;
+                                    const remainingCapacity = limit - totalScrapedMultipleItems;
+                                    const itemsToActuallyTake = Math.min(itemsToPotentiallyTake, remainingCapacity);
+
+                                    if (itemsToActuallyTake > 0) {
+                                        results[selector.name] = await Promise.all(
+                                            elements.slice(0, itemsToActuallyTake).map(el => this._extractDataFromElement(el, selector.type, selector.attribute))
+                                        );
+                                        totalScrapedMultipleItems += itemsToActuallyTake;
+                                    } else {
+                                        results[selector.name] = [];
+                                    }
+                                } else {
+                                    results[selector.name] = [];
+                                }
                             }
                         } else { // Single element expected
                             results[selector.name] = elements[0]
@@ -227,6 +243,12 @@ class ScraperService {
                     } catch (error) {
                         console.error(`ScraperService: Error processing selector "${selector.name}" (${selector.query}) on ${url}: ${error.message.split('\n')[0]}`);
                         results[selector.name] = null; // Ensure result is null on error
+                    }
+
+                    // Check if limit is reached after processing the current selector
+                    if (totalScrapedMultipleItems >= limit) {
+                        console.log(`ScraperService: Reached scrape limit of ${limit} items from 'multiple' selectors for ${url}. Stopping further scraping.`);
+                        break; // Exit the loop over selectors
                     }
                 }
 

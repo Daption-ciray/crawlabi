@@ -14,9 +14,9 @@ const MAX_REDIRECTS = appConfig.analyzer_settings.maxRedirects;
 const RETRY_ATTEMPTS = appConfig.analyzer_settings.retryAttempts;
 const RETRY_DELAY = appConfig.analyzer_settings.retryDelay;
 const MAX_PER_MINUTE = appConfig.analyzer_settings.maxPerMinute;
-let sentThisMinute = 0;
+// let sentThisMinute = 0; // Removed for no-batching
 
-setInterval(() => { sentThisMinute = 0; }, 60000); // Interval for MAX_PER_MINUTE reset
+// setInterval(() => { sentThisMinute = 0; }, 60000); // Removed for no-batching
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -200,12 +200,6 @@ async function processBatchAnalysis(imageUrls, analysisFn) {
     const errors = [];
 
     for (const url of imageUrls) {
-        while (sentThisMinute >= MAX_PER_MINUTE) {
-            console.log(`TPM limit (${MAX_PER_MINUTE}/min) reached, waiting 1 second...`);
-            await sleep(1000);
-        }
-        sentThisMinute++;
-        
         try {
             const result = await analysisFn(url);
             if (result.error) {
