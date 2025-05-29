@@ -38,6 +38,14 @@ async function clearDirectory(directory) {
 
 const app = express();
 
+// Timeout ayarı
+app.use((req, res, next) => {
+    // Her request için 2 dakika timeout
+    req.setTimeout(120000);
+    res.setTimeout(120000);
+    next();
+});
+
 // Uygulama başlamadan önce uploads_pdf klasörünü temizle/oluştur
 clearDirectory(UPLOAD_DIR_PDF).then(() => {
     // Development middleware
