@@ -41,8 +41,8 @@ const app = express();
 // Timeout ayarı
 app.use((req, res, next) => {
     // Her request için 2 dakika timeout
-    req.setTimeout(120000);
-    res.setTimeout(120000);
+    req.setTimeout(12000000);
+    res.setTimeout(12000000);
     next();
 });
 
